@@ -38,11 +38,21 @@ import {
 } from "lucide-react";
 
 export default function DriverJobsPortal() {
-  const [view, setView] = useState<"login" | "hub" | "setup" | "driver">("login");
+  const [view, setView] = useState<"login" | "hub" | "setup" | "driver">(() => {
+    try {
+      const stored = localStorage.getItem("session_view");
+      return (stored as "login" | "hub" | "setup" | "driver") || "login";
+    } catch { return "login"; }
+  });
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [activeUser, setActiveUser] = useState<User | null>(null);
+  const [activeUser, setActiveUser] = useState<User | null>(() => {
+    try {
+      const stored = localStorage.getItem("session_user");
+      return stored ? (JSON.parse(stored) as User) : null;
+    } catch { return null; }
+  });
   const [portalReady, setPortalReady] = useState(false);
   const [portalError, setPortalError] = useState("");
 
@@ -812,13 +822,18 @@ ${sections.join("")}
 
       setError("");
       setActiveUser(result.user);
-      setView(result.user.role === "admin" ? "hub" : "setup");
+      const nextView = result.user.role === "admin" ? "hub" : "setup";
+      setView(nextView);
+      try { localStorage.setItem("session_user", JSON.stringify(result.user)); } catch { /* ignore */ }
+      try { localStorage.setItem("session_view", nextView); } catch { /* ignore */ }
     } catch {
       setError("Login failed");
     }
   };
 
   const handleLogout = () => {
+    try { localStorage.removeItem("session_user"); } catch { /* ignore */ }
+    try { localStorage.removeItem("session_view"); } catch { /* ignore */ }
     setView("login");
     setUsername("");
     setPassword("");
@@ -833,6 +848,7 @@ ${sections.join("")}
     setClosingMileage(currentMileageEntry?.closingMileage || "");
     setMileageRequired(!hasOpeningMileage);
     setView("driver");
+    try { localStorage.setItem("session_view", "driver"); } catch { /* ignore */ }
     setActiveDriverAction(hasOpeningMileage ? "home" : "mileage");
   };
 
