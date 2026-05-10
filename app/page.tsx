@@ -104,7 +104,7 @@ export default function DriverJobsPortal() {
   >("home");
 
   const [hubTab, setHubTab] = useState<
-    "overview" | "live" | "completed" | "reports" | "drivers" | "sites" | "folders" | "fuel" | "mileage" | "weekly"
+    "overview" | "live" | "completed" | "reports" | "drivers" | "sites" | "trucks" | "folders" | "fuel" | "mileage" | "weekly"
   >("overview");
   const [jobSavedNotice, setJobSavedNotice] = useState(false);
   const [jobCompleteNotice, setJobCompleteNotice] = useState(false);
@@ -113,6 +113,7 @@ export default function DriverJobsPortal() {
   const [draftReg, setDraftReg] = useState("");
   const [driverMgmtError, setDriverMgmtError] = useState("");
   const [siteMgmtError, setSiteMgmtError] = useState("");
+  const [truckMgmtError, setTruckMgmtError] = useState("");
   const [newDriverName, setNewDriverName] = useState("");
   const [newDriverUsername, setNewDriverUsername] = useState("");
   const [newDriverPassword, setNewDriverPassword] = useState("");
@@ -121,6 +122,7 @@ export default function DriverJobsPortal() {
   const [newSiteName, setNewSiteName] = useState("");
   const [newSiteType, setNewSiteType] = useState<"collection" | "destination" | "both">("both");
   const [newContractName, setNewContractName] = useState("");
+  const [newTruckReg, setNewTruckReg] = useState("");
   const [showDieselFuel, setShowDieselFuel] = useState(true);
   const [showAdBlueFuel, setShowAdBlueFuel] = useState(true);
   const [selectedCompletedDriver, setSelectedCompletedDriver] = useState("all");
@@ -333,6 +335,28 @@ export default function DriverJobsPortal() {
     }
   };
 
+  const getSetupStorageKey = (userId: string) => `session_driver_setup_${userId}`;
+
+  const readDriverSetup = (userId: string) => {
+    try {
+      const stored = localStorage.getItem(getSetupStorageKey(userId));
+      if (!stored) return null;
+      const parsed = JSON.parse(stored) as {
+        contract?: string;
+        reg?: string;
+        date?: string;
+      };
+
+      return {
+        contract: typeof parsed.contract === "string" ? parsed.contract : "",
+        reg: typeof parsed.reg === "string" ? parsed.reg : "",
+        date: typeof parsed.date === "string" ? parsed.date : "",
+      };
+    } catch {
+      return null;
+    }
+  };
+
   useEffect(() => {
     async function loadPortal() {
       try {
@@ -368,6 +392,50 @@ export default function DriverJobsPortal() {
 
     loadPortal();
   }, []);
+
+  useEffect(() => {
+    if (!activeUser) {
+      return;
+    }
+
+    const setup = readDriverSetup(activeUser.id);
+    if (!setup) {
+      return;
+    }
+
+    const nextContract = contracts.includes(setup.contract) ? setup.contract : "";
+    const nextReg = vehicleRegs.includes(setup.reg) ? setup.reg : "";
+
+    setSelectedContract((current) => current || nextContract);
+    setSelectedReg((current) => current || nextReg);
+    setSelectedDate((current) => current || setup.date);
+    setDraftContract((current) => current || nextContract);
+    setDraftReg((current) => current || nextReg);
+  }, [activeUser, contracts, vehicleRegs]);
+
+  useEffect(() => {
+    if (!activeUser) {
+      return;
+    }
+
+    try {
+      localStorage.setItem(
+        getSetupStorageKey(activeUser.id),
+        JSON.stringify({ contract: selectedContract, reg: selectedReg, date: selectedDate }),
+      );
+    } catch {
+      // Ignore storage write failures and keep in-memory state.
+    }
+  }, [activeUser, selectedContract, selectedReg, selectedDate]);
+
+  useEffect(() => {
+    if (selectedReg && !vehicleRegs.includes(selectedReg)) {
+      setSelectedReg("");
+    }
+    if (draftReg && !vehicleRegs.includes(draftReg)) {
+      setDraftReg("");
+    }
+  }, [vehicleRegs, selectedReg, draftReg]);
 
   useEffect(() => {
     if (!activeUser || view !== "hub") {
@@ -1211,6 +1279,74 @@ ${sections.join("")}
     }
   };
 
+  const updateVehicleRegDraft = (previousReg: string, nextReg: string) => {
+    if (previousReg === nextReg) return;
+    setVehicleRegs((prev) => prev.map((reg) => (reg === previousReg ? nextReg : reg)));
+  };
+
+  const persistVehicleUpdate = async (previousReg: string, nextReg: string) => {
+    const trimmedPrevious = previousReg.trim();
+    const trimmedNext = nextReg.trim();
+
+    if (!trimmedPrevious || !trimmedNext) {
+      setTruckMgmtError("Vehicle registration cannot be empty.");
+      return;
+    }
+
+    if (
+      normalize(trimmedPrevious) !== normalize(trimmedNext) &&
+      vehicleRegs.some((reg) => normalize(reg) === normalize(trimmedNext))
+    ) {
+      setTruckMgmtError("Vehicle registration already exists.");
+      setVehicleRegs((prev) => prev.map((reg) => (reg === nextReg ? previousReg : reg)));
+      return;
+    }
+
+    try {
+      await postPortalAction("updateVehicle", { previousReg: trimmedPrevious, nextReg: trimmedNext });
+      setTruckMgmtError("");
+    } catch (truckError) {
+      setTruckMgmtError(truckError instanceof Error ? truckError.message : "Failed to update vehicle.");
+      setVehicleRegs((prev) => prev.map((reg) => (reg === nextReg ? previousReg : reg)));
+    }
+  };
+
+  const removeVehicle = async (reg: string) => {
+    if (vehicleRegs.length <= 1) {
+      setTruckMgmtError("At least one vehicle registration is required.");
+      return;
+    }
+
+    try {
+      await postPortalAction("removeVehicle", { reg });
+      setTruckMgmtError("");
+    } catch (truckError) {
+      setTruckMgmtError(truckError instanceof Error ? truckError.message : "Failed to remove vehicle.");
+    }
+  };
+
+  const addVehicle = async () => {
+    const reg = newTruckReg.trim();
+    if (!reg) {
+      setTruckMgmtError("Vehicle registration is required.");
+      return;
+    }
+
+    const duplicate = vehicleRegs.some((existingReg) => normalize(existingReg) === normalize(reg));
+    if (duplicate) {
+      setTruckMgmtError("Vehicle registration already exists.");
+      return;
+    }
+
+    try {
+      await postPortalAction("addVehicle", { reg });
+      setTruckMgmtError("");
+      setNewTruckReg("");
+    } catch (truckError) {
+      setTruckMgmtError(truckError instanceof Error ? truckError.message : "Failed to add vehicle.");
+    }
+  };
+
   const openChangeSetupModal = () => {
     setDraftContract(selectedContract);
     setDraftReg(selectedReg);
@@ -1349,7 +1485,7 @@ ${sections.join("")}
           </div>
 
           <div className="flex flex-wrap gap-2">
-            {["overview", "drivers", "sites", "folders", "fuel", "mileage", "live", "completed", "reports", "weekly"].map((tab) => {
+            {["overview", "drivers", "sites", "trucks", "folders", "fuel", "mileage", "live", "completed", "reports", "weekly"].map((tab) => {
               const typedTab = tab as typeof hubTab;
               const badgeCount = hubTab !== typedTab ? (hubTabBadges[typedTab] || 0) : 0;
               const shouldHighlight = badgeCount > 0 && hubTab !== typedTab;
@@ -2103,6 +2239,46 @@ ${sections.join("")}
                 </CardContent>
               </Card>
             </div>
+          ) : null}
+
+          {hubTab === "trucks" ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Truck Registrations</CardTitle>
+                <CardDescription>Add, edit, and remove trucks from the portal list.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+                  <Input
+                    placeholder="New truck registration"
+                    value={newTruckReg}
+                    onChange={(e) => setNewTruckReg(e.target.value)}
+                  />
+                  <Button onClick={addVehicle}>Add Truck</Button>
+                </div>
+
+                {truckMgmtError ? <p className="text-sm text-red-600">{truckMgmtError}</p> : null}
+
+                {vehicleRegs.length === 0 ? (
+                  <p className="text-sm text-slate-500">No trucks available.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {vehicleRegs.map((reg) => (
+                      <div key={reg} className="grid gap-2 rounded-md border border-slate-200 p-3 md:grid-cols-[1fr_auto]">
+                        <Input
+                          value={reg}
+                          onChange={(e) => updateVehicleRegDraft(reg, e.target.value)}
+                          onBlur={(e) => persistVehicleUpdate(reg, e.target.value)}
+                        />
+                        <Button variant="outline" onClick={() => removeVehicle(reg)}>
+                          Remove
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           ) : null}
 
           {hubTab === "sites" ? (
